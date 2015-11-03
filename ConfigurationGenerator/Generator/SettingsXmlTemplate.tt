@@ -1,0 +1,176 @@
+﻿<#@ template hostSpecific="true" debug="false" #>
+<#@ assembly name="EnvDTE" #>
+<#@ assembly name="System.Core" #>
+<#@ assembly name="System.Data.Linq" #>
+<#@ assembly name="System.Xml" #>
+<#@ assembly name="System.Xml.Linq" #>
+<#@ include file="T4Toolbox.tt" #>
+<#@ include file="Helpers.tt" #>
+<#@ import namespace="System" #>
+<#@ import namespace="System.CodeDom" #>
+<#@ import namespace="System.CodeDom.Compiler" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ import namespace="System.IO" #>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Text" #>
+<#@ import namespace="System.Xml" #>
+<#@ import namespace="System.Xml.Schema" #>
+<#@ import namespace="System.Xml.Serialization" #>
+<#@ import namespace="Microsoft.CSharp" #>
+<#@ import namespace="Microsoft.VisualStudio.TextTemplating" #>
+<#@ import namespace="System.Xml.Linq" #>
+<#+ 
+public class SettingsXmlTemplate : CSharpTemplate
+{    
+    #region Configuration Members
+
+	public string InputXmlFilePath { get; set; }
+
+	public string OutputXmlFilePath { get; set; }
+     
+    #endregion
+            
+    private EnvDTE.DTE m_dte;
+    private EnvDTE.Project m_activeProject;
+          
+    public EnvDTE.Project ActiveProject
+    {
+        get
+        {
+            if (m_activeProject == null)
+            {
+                if (DteInstance != null)
+                {
+                    var projects = (Array)DteInstance.ActiveSolutionProjects;
+
+                    m_activeProject = (projects != null && projects.Length > 0) ? (EnvDTE.Project)projects.GetValue(0) : null;
+                };
+            };
+
+            return m_activeProject;
+        }
+    }
+
+    public EnvDTE.DTE DteInstance
+    {
+        get
+        {
+            if (m_dte == null)
+                m_dte = (EnvDTE.DTE)(TransformationContext.Current.GetService(typeof(EnvDTE.DTE)));
+
+            return m_dte;
+        }
+    }
+
+    public EnvDTE.Project FindProject ( string projectName )
+    {
+        if (String.IsNullOrEmpty(projectName))
+                return null;
+
+        foreach (EnvDTE.Project project in DteInstance.Solution.Projects)
+        {
+            if (String.Compare(project.Name, projectName, true) == 0)
+                return project;
+        };
+
+        return null;
+    }
+    
+    public string GetProjectItemFileName ( EnvDTE.ProjectItem item )
+    {
+        return (item != null && item.FileCount > 0) ? item.FileNames[0] : "";
+    }
+
+	public string GetXmlClassName() {
+		XDocument xml = XDocument.Load(InputXmlFilePath);
+        return xml.Root.Name.LocalName;
+	}
+
+	public void GenerateXmlClassFile()
+	{
+		string className = GetXmlClassName();
+		var xsdClassGen = new XsdClassGen(DefaultNamespace);
+		xsdClassGen.XmlFilePath = InputXmlFilePath;
+		xsdClassGen.ReadSchema();
+
+		StringBuilder sb = new StringBuilder();
+		using(StringWriter writer = new StringWriter(sb))
+		{
+			xsdClassGen.Generate(writer);
+		}
+
+		string xmlClass = sb.Replace("public partial class", "public class").ToString();
+
+		string fileName = string.Concat(className, ".cs");
+		string path = string.Empty;
+		if (!string.IsNullOrEmpty(OutputXmlFilePath)) {
+			path = Path.Combine(OutputXmlFilePath, fileName);
+		}
+		Warning("Output File Path: " + path);
+        using (StreamWriter writer = new StreamWriter(path, true))
+		{
+			writer.WriteLine(xmlClass);
+		}
+	}
+
+    public override string TransformText () 
+    {
+		var className = "SettingsXml";
+#>
+/*
+ * This file is auto-generated from a config file.  
+ * Do not modify this file.  Modifications will be lost when the file is regenerated.
+ */
+
+namespace <#= DefaultNamespace #>
+{    	
+	using System;
+	using System.Collections.Generic;
+	using System.Globalization;
+	using System.Linq;
+	using System.IO;
+	using System.Xml;
+	using System.Xml.Serialization;
+	using ConfigurationGenerator.Watchers;
+	using ConfigurationGenerator.Watchers.Abstract;
+
+	public class <#= className #>
+	{
+		public IFileWatcher FileWatcher { get; set; }
+
+		private <#= GetXmlClassName() #> s_defaultInstance = new <#= GetXmlClassName() #>();
+
+		public <#= GetXmlClassName() #> <#= GetXmlClassName() #>
+		{
+			get { return s_defaultInstance; }
+			protected set { s_defaultInstance = value ?? new <#= GetXmlClassName() #>(); }
+		}
+
+		public <#= className #>(bool watch = false)
+		{
+			this.FileWatcher = new FileWatcher(watch);
+			RefreshConfiguration();
+		}
+
+		public void RefreshConfiguration()
+		{
+			s_defaultInstance = Deserialize();
+		}
+
+		private <#= GetXmlClassName() #> Deserialize()
+		{
+			XmlSerializer serializer = new XmlSerializer(typeof(<#= GetXmlClassName() #>));
+			return (<#= GetXmlClassName() #>)serializer.Deserialize(new StringReader(this.FileWatcher.GetXmlSection(@"<#= InputXmlFilePath #>")));
+		}
+	}
+}   
+
+<#+
+		GenerateXmlClassFile();
+#>
+
+<#+
+        return this.GenerationEnvironment.ToString();
+    }
+}
+#>

@@ -1,0 +1,15 @@
+<#@ template debug="false" hostspecific="true" language="C#" #>
+<#@ output extension=".generated.cs" #>
+<#@ include file="SettingsAppConfigTemplate.tt" #>
+<#
+    SettingsAppConfigTemplate template = new SettingsAppConfigTemplate();
+	template.OutputXmlFilePath = @"c:\Users\Shane.Kmiecik\Documents\Visual Studio 2013\Projects\ConfigurationGenerator\ConfigurationGenerator\Files\";
+
+	System.IO.DirectoryInfo dir = new DirectoryInfo(template.OutputXmlFilePath);
+	foreach (FileInfo file in dir.GetFiles())
+	{
+		file.Delete(); 
+	}
+
+    template.Render();
+#>

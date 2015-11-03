@@ -1,0 +1,506 @@
+﻿<#@ assembly name="System.Core" #>
+<#@ assembly name="System.Configuration" #>
+<#@ assembly name="EnvDTE" #>
+<#@ assembly name="System.Data" #>
+<#@ assembly name="System.Xml" #>
+<#@ assembly name="System.Xml.Linq" #>
+<#@ include file="T4Toolbox.tt" #>
+<#@ include file="Helpers.tt" #>
+<#@ import namespace="System.Configuration" #>
+<#@ import namespace="System.Globalization" #>
+<#@ import namespace="System.IO" #>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Text" #>
+<#@ import namespace="System.Data.SqlClient" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ import namespace="System.CodeDom" #>
+<#@ import namespace="Microsoft.CSharp" #>
+<#@ import namespace="System.Xml" #>
+<#@ import namespace="System.Xml.Linq" #>
+<#+ 
+public class SettingsAppConfigTemplate : CSharpTemplate
+{    
+    #region Configuration Members
+     
+    public string ConfigurationProject { get; set; }
+
+	public string OutputXmlFilePath { get; set; }
+
+    public SettingsAppConfigTemplate ExcludeSetting ( string settingName )
+    {
+        if (settingName.Contains("*"))
+        {
+            var token = settingName.Substring(0, settingName.IndexOf('*'));
+            m_exclusionMasks.Add(token);
+        } else
+            m_exclusions.Add(settingName);
+
+        return this;
+    }
+       
+    public SettingsAppConfigTemplate OverrideSettingType ( string settingName, Type settingType )
+	{
+		m_settingsTypes[settingName] = settingType;
+
+		return this;
+	}
+    #endregion
+            
+    private Lazy<Dictionary<Type, string>> m_settingsConverter = new Lazy<Dictionary<Type, string>>(InitializeSettingsConverter);
+    private Dictionary<string, Type> m_settingsTypes = new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase);
+
+    private List<string> m_exclusions = new List<string>();
+    private List<string> m_exclusionMasks = new List<string>();
+
+    private KeyValueConfigurationCollection AppSettingsInfo { get; set; }
+
+    private bool IsExcluded ( string settingName )
+    {
+        return m_exclusions.Where(x => String.Compare(x, settingName, true) == 0).Any() ||
+               m_exclusionMasks.Where(x => settingName.StartsWith(x, StringComparison.OrdinalIgnoreCase)).Any();
+    }    
+
+    private EnvDTE.DTE m_dte;
+    private EnvDTE.Project m_activeProject;
+  
+    private KeyValueConfigurationCollection GetAppSettings ( EnvDTE.ProjectItem configItem )
+    {
+        if (configItem != null)
+        {
+            var configFile = new ExeConfigurationFileMap() { ExeConfigFilename = GetProjectItemFileName(configItem) };
+
+            var config = ConfigurationManager.OpenMappedExeConfiguration(configFile, ConfigurationUserLevel.None);
+
+            return (config.AppSettings != null) ? config.AppSettings.Settings : null;
+        };
+
+        return null;
+    }
+
+    private string GetSettingConverter ( Type type )
+	{
+		string converter;
+		if (m_settingsConverter.Value.TryGetValue(type, out converter))
+			return converter;
+		
+		return "";
+	}
+
+	private string GetSettingsConverterCulture (Type type)
+	{
+		if (type.Name != "Boolean" && type.Name != "String")
+		{
+			return ", CultureInfo.InvariantCulture";
+		}
+
+		return "";
+	}
+
+    private Type GetSettingType ( string name, string value )
+	{
+        Type explicitType;
+		if (m_settingsTypes.TryGetValue(name, out explicitType) && explicitType != null)
+			return explicitType;
+
+		int iValue;
+		if (Int32.TryParse(value, NumberStyles.Integer, null, out iValue))
+			return typeof(int);
+						
+		long lValue;
+		if (long.TryParse(value, out lValue))
+			return typeof(long);
+
+		double dValue;
+		if (double.TryParse(value, NumberStyles.AllowDecimalPoint | NumberStyles.AllowCurrencySymbol, CultureInfo.InvariantCulture, out dValue))
+			return typeof(double);
+				
+		bool bValue;
+		if (Boolean.TryParse(value, out bValue))
+			return typeof(bool);
+
+		DateTime dateValue;
+		if (DateTime.TryParse(value, out dateValue))
+			return typeof(DateTime);
+
+		return typeof(string);
+	}
+    
+    private static Dictionary<Type, string> InitializeSettingsConverter ()
+	{
+		return new Dictionary<Type, string>() {
+					{ typeof(sbyte), "SByte.Parse" },
+					{ typeof(short), "Int16.Parse" },		            
+					{ typeof(int), "Int32.Parse" },
+					{ typeof(long), "Int64.Parse" },           
+
+					{ typeof(byte), "Byte.Parse" },
+					{ typeof(ushort), "UInt16.Parse" },
+					{ typeof(uint), "UInt32.Parse" },
+					{ typeof(ulong), "UInt64.Parse" },
+
+					{ typeof(float), "Single.Parse" },
+					{ typeof(double), "Double.Parse" },		
+					{ typeof(decimal), "Decimal.Parse" },		
+					
+					{ typeof(bool), "Boolean.Parse" },                    		            		            		            
+					{ typeof(char), "Char.Parse" },
+					{ typeof(DateTime), "DateTime.Parse" },
+					{ typeof(Guid), "Guid.Parse" },
+					{ typeof(TimeSpan), "TimeSpan.Parse" },
+
+					{ typeof(string), "" }
+					};
+	}    
+    
+    protected override void Validate ()
+    {
+        base.Validate();
+
+        KeyValueConfigurationCollection info = null;
+
+        var project = String.IsNullOrEmpty(ConfigurationProject) ? ActiveProject : FindProject(ConfigurationProject);
+		if (project != null)
+		{
+			var configItem = FindConfigProjectItem(project);
+			if (configItem != null)
+			{
+				info = GetAppSettings(configItem);
+				if (info == null || info.Count == 0)
+					Warning("No appSetting entries found.");
+			} else
+				Warning("Unable to locate configuration file.");
+		} else
+			Error("Unable to locate configuration project '{0}'.", ConfigurationProject);
+		
+		AppSettingsInfo = info ?? new KeyValueConfigurationCollection();
+    }
+
+    public EnvDTE.Project ActiveProject
+    {
+        get
+        {
+            if (m_activeProject == null)
+            {
+                if (DteInstance != null)
+                {
+                    var projects = (Array)DteInstance.ActiveSolutionProjects;
+
+                    m_activeProject = (projects != null && projects.Length > 0) ? (EnvDTE.Project)projects.GetValue(0) : null;
+                };
+            };
+
+            return m_activeProject;
+        }
+    }
+
+    public EnvDTE.DTE DteInstance
+    {
+        get
+        {
+            if (m_dte == null)
+                m_dte = (EnvDTE.DTE)(TransformationContext.Current.GetService(typeof(EnvDTE.DTE)));
+
+            return m_dte;
+        }
+    }
+
+    public EnvDTE.ProjectItem FindConfigProjectItem ( EnvDTE.Project source )
+    {
+        return FindItem(source, "web.config", true) ?? FindItem(source, "app.config", true);
+    }
+
+    public static EnvDTE.ProjectItem FindItem ( EnvDTE.Project source, string itemName, bool recurse )
+    {            
+        var items = source.ProjectItems;
+
+        //ProjectItems.Item() will throw if the item does not exist so do it the hard way		
+        foreach (EnvDTE.ProjectItem child in items)
+        {
+            if (String.Compare(child.Name, itemName, true) == 0)
+                return child;                                
+        };
+
+        if (recurse)
+        {
+            foreach (EnvDTE.ProjectItem child in items)
+            {
+                var item = FindItem(child, itemName, true);
+                if (item != null)
+                    return item;
+            };
+        };
+
+        return null;
+    }
+
+    public static EnvDTE.ProjectItem FindItem ( EnvDTE.ProjectItem source, string itemName, bool recurse )
+    {            
+        var items = source.ProjectItems;
+
+        //ProjectItems.Item() will throw if the item does not exist so do it the hard way		
+        foreach (EnvDTE.ProjectItem child in items)
+        {
+            if (String.Compare(child.Name, itemName, true) == 0)
+                return child;                                
+        };
+
+        if (recurse)
+        {
+            foreach (EnvDTE.ProjectItem child in items)
+            {
+                var item = FindItem(child, itemName, true);
+                if (item != null)
+                    return item;
+            };
+        };
+
+        return null;
+    }
+
+    public EnvDTE.Project FindProject ( string projectName )
+    {
+        if (String.IsNullOrEmpty(projectName))
+                return null;
+
+        foreach (EnvDTE.Project project in DteInstance.Solution.Projects)
+        {
+            if (String.Compare(project.Name, projectName, true) == 0)
+                return project;
+        };
+
+        return null;
+    }
+
+    public static string GetFriendlyName ( Type source )
+    {
+        var provider = new CSharpCodeProvider();
+
+        var tr = new CodeTypeReference(source);
+
+        var str = provider.GetTypeOutput(tr);
+
+        //Ref and out parameters have an & on the end so strip it off
+        if (str.EndsWith("&"))
+            return str.Substring(0, str.Length - 1);
+
+        return str;
+    }
+    
+    public string GetProjectItemFileName ( EnvDTE.ProjectItem item )
+    {
+        return (item != null && item.FileCount > 0) ? item.FileNames[0] : "";
+    }
+
+
+    public XDocument LoadXmlConfiguration()
+    {
+        var project = String.IsNullOrEmpty(ConfigurationProject) ? ActiveProject : FindProject(ConfigurationProject);
+        string configFilePath = string.Empty;
+        if (project != null)
+        {
+            var configItem = FindConfigProjectItem(project);
+            if (configItem != null)
+            {
+                configFilePath = configItem.Properties.Item("FullPath").Value.ToString();
+            }
+            else
+            {
+                Warning("Unable to locate configuration file.");
+            }
+        }
+
+        XDocument xml = XDocument.Load(configFilePath);
+        return xml;
+    }
+
+	public IEnumerable<KeyValuePair<string, string>> GetConfigurationSections()
+    {
+        XDocument xml = LoadXmlConfiguration();
+		var sections = new List<KeyValuePair<string, string>>();
+
+		if (xml.Root != null && xml.Root.Element("configSections") != null)
+        {
+			var groups = xml.Descendants("configSections").Select(x => x.Elements().Select(y => y.Attribute("name").Value.ToString()).ToList()).FirstOrDefault();
+			foreach (string group in groups)
+			{
+				string sectionName = xml.Root.Elements(group).Descendants().FirstOrDefault().Name.LocalName;
+				sections.Add(new KeyValuePair<string, string>(group, sectionName));
+			}
+        }
+
+        return sections;
+    }
+
+	public string GetXmlSection(string section)
+    {
+        XDocument xml = LoadXmlConfiguration();
+        var xmlString = xml.Root.Elements(section).FirstOrDefault().Descendants().FirstOrDefault().ToString();
+
+        return xmlString;
+    }
+
+    public string GetXmlClass(string defaultNameSpace, string xmlString)
+    {
+        var xsdClassGen = new XsdClassGen(defaultNameSpace);
+        xsdClassGen.ReadSchema(xmlString);
+        StringBuilder sb = new StringBuilder();
+        using (StringWriter writer = new StringWriter(sb))
+        {
+            xsdClassGen.Generate(writer);
+        }
+
+		sb.Replace("public partial class", "public class");
+        return sb.ToString();
+    }
+
+	public void GenerateXmlClassFile(string fileName, string xmlClass)
+	{
+		string path = string.Concat(fileName, ".cs");
+		if (!string.IsNullOrEmpty(OutputXmlFilePath)) {
+			path = Path.Combine(OutputXmlFilePath, string.Concat(fileName, ".cs"));
+		}
+		Warning("Output File Path: " + path);
+        using (StreamWriter writer = new StreamWriter(path, true))
+		{
+			writer.WriteLine(xmlClass);
+		}
+	}
+
+    public override string TransformText () 
+    {
+        //var className = PropertyName(Path.GetFileNameWithoutExtension(TransformationContext.Current.Host.TemplateFile));
+		var className = "SettingsAppConfig";
+#>
+/*
+ * This file is auto-generated from a config file.  
+ * Do not modify this file.  Modifications will be lost when the file is regenerated.
+ */
+using System;
+using System.Configuration;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Xml;
+using System.Xml.Serialization;
+using ConfigurationGenerator.Watchers;
+using ConfigurationGenerator.Watchers.Abstract;
+
+namespace <#= DefaultNamespace #>
+{    	
+	public class <#= className #>
+	{	
+		public IFileWatcher FileWatcher { get; set; }
+
+		public Dictionary<string, string> CurrentConfigurationCollection { get; private set; }
+
+<#+
+    foreach (KeyValuePair<string, string> section in GetConfigurationSections()) { 
+#>
+
+		private <#= section.Value #> s_defaultInstance<#= section.Value #> = new <#= section.Value #>();
+
+		public <#= section.Value #> <#= section.Value #>
+		{
+			get { return s_defaultInstance<#= section.Value #>; }
+			protected set { s_defaultInstance<#= section.Value #> = value ?? new <#= section.Value #>(); }
+		}
+<#+  }
+#>
+
+
+		public <#= className #>(bool watch = false)
+		{
+			this.FileWatcher = new FileWatcher(watch);
+
+			this.CurrentConfigurationCollection = new Dictionary<string, string>();
+			RefreshConfiguration();
+		}
+
+		public void RefreshConfiguration()
+		{
+			ConfigurationManager.RefreshSection("appSettings");
+
+<#+
+        foreach (KeyValueConfigurationElement setting in AppSettingsInfo) { 
+            if (IsExcluded(setting.Key))
+                continue;
+
+            var type = GetSettingType(setting.Key, setting.Value);
+#>
+			<#= PropertyName(setting.Key) #> = <#= GetSettingConverter(type) #>(GetConfigSetting("<#= setting.Key #>")<#= GetSettingsConverterCulture(type) #>);
+<#+      }
+#>
+<#+
+		foreach (KeyValuePair<string, string> section in GetConfigurationSections()) { 
+#>
+			s_defaultInstance<#= section.Value #> = Deserialize<#= section.Value #>();
+<#+		}
+#>
+
+		}
+
+<#+
+        foreach (KeyValueConfigurationElement setting in AppSettingsInfo) { 
+            if (IsExcluded(setting.Key))
+                continue;
+
+            var type = GetSettingType(setting.Key, setting.Value);
+#>
+
+        public <#= GetFriendlyName(type) #> <#= PropertyName(setting.Key) #>
+        {
+            get; private set;
+        }
+<#+      }
+#>
+        protected virtual string GetConfigSetting(string settingName)
+		{
+            string setting = ConfigurationManager.AppSettings[settingName];
+            string value = "";
+            this.CurrentConfigurationCollection.TryGetValue(settingName, out value);
+
+            // new dict item?
+            if (string.IsNullOrEmpty(value))
+            {
+                this.CurrentConfigurationCollection.Add(settingName, setting);
+            }
+            else
+            {
+                // value exists in dict - update it
+                if (!value.Equals(setting, StringComparison.InvariantCultureIgnoreCase))
+                {
+                    this.CurrentConfigurationCollection[settingName] = setting;
+                }
+            }
+
+			return setting ?? "";
+		}	
+				
+<#+
+    foreach (KeyValuePair<string, string> section in GetConfigurationSections()) { 
+#>
+
+		private <#= section.Value #> Deserialize<#= section.Value #>()
+		{
+			XmlSerializer serializer = new XmlSerializer(typeof(<#= section.Value #>));
+			return (<#= section.Value #>)serializer.Deserialize(new StringReader(this.FileWatcher.GetXmlSection("<#= section.Key #>")));
+		}
+<#+  }
+#>
+			
+	}
+}   
+
+<#+
+    foreach (KeyValuePair<string, string> section in GetConfigurationSections()) { 
+		string xmlClass = GetXmlClass(DefaultNamespace, GetXmlSection(section.Key));
+		GenerateXmlClassFile(section.Value, xmlClass);
+#>
+<#+		}
+#>
+
+<#+
+        return this.GenerationEnvironment.ToString();
+    }
+}
+#>

@@ -1,0 +1,17 @@
+<#@ template debug="false" hostspecific="true" language="C#" #>
+<#@ output extension=".generated.cs" #>
+<#@ include file="SettingsDatabaseTemplate.tt" #>
+<#
+    SettingsDatabaseTemplate template = new SettingsDatabaseTemplate();
+	
+	// Database params
+	template.DataSource = "localhost";
+    template.InitialCatalog = "SettingsDB";
+    template.UserID = "";
+    template.Password = "";
+    template.IntegratedSecurity = true;
+	template.SettingsTable = "Config";
+	template.RefreshTimeout = "1000";
+
+    template.Render();
+#>

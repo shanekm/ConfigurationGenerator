@@ -1,0 +1,5 @@
+c:\users\shane.kmiecik\documents\visual studio 2013\Projects\ConfigurationGenerator\ConfigurationGenerator\bin\Debug\ConfigurationGenerator.dll.config
+c:\users\shane.kmiecik\documents\visual studio 2013\Projects\ConfigurationGenerator\ConfigurationGenerator\bin\Debug\ConfigurationGenerator.dll
+c:\users\shane.kmiecik\documents\visual studio 2013\Projects\ConfigurationGenerator\ConfigurationGenerator\bin\Debug\ConfigurationGenerator.pdb
+c:\users\shane.kmiecik\documents\visual studio 2013\Projects\ConfigurationGenerator\ConfigurationGenerator\obj\Debug\ConfigurationGenerator.dll
+c:\users\shane.kmiecik\documents\visual studio 2013\Projects\ConfigurationGenerator\ConfigurationGenerator\obj\Debug\ConfigurationGenerator.pdb

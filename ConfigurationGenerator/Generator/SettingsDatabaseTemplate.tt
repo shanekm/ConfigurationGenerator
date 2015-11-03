@@ -1,0 +1,447 @@
+﻿<#@ assembly name="System.Core" #>
+<#@ assembly name="System.Configuration" #>
+<#@ assembly name="EnvDTE" #>
+<#@ assembly name="System.Data" #>
+<#@ include file="T4Toolbox.tt" #>
+<#@ import namespace="System.Configuration" #>
+<#@ import namespace="System.Globalization" #>
+<#@ import namespace="System.IO" #>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Text" #>
+<#@ import namespace="System.Data.SqlClient" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ import namespace="System.CodeDom" #>
+<#@ import namespace="Microsoft.CSharp" #>
+<#+ 
+public class SettingsDatabaseTemplate : CSharpTemplate
+{    
+    #region Configuration Members
+     
+	public string ConfigurationProject { get; set; }
+
+	public string SettingsTable { get; set; }
+
+	public string InitialCatalog { get; set; }
+
+	public string RefreshTimeout { get; set; }
+
+	public string DataSource { get; set; }
+
+	public string UserID { get; set; }
+
+	public string Password { get; set; }
+
+	public bool IntegratedSecurity { get; set; }
+
+    #endregion
+            
+    private Lazy<Dictionary<Type, string>> m_settingsConverter = new Lazy<Dictionary<Type, string>>(InitializeSettingsConverter);
+    private Dictionary<string, Type> m_settingsTypes = new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase);
+
+    private List<string> m_exclusions = new List<string>();
+    private List<string> m_exclusionMasks = new List<string>();
+
+    private bool IsExcluded ( string settingName )
+    {
+        return m_exclusions.Where(x => String.Compare(x, settingName, true) == 0).Any() ||
+               m_exclusionMasks.Where(x => settingName.StartsWith(x, StringComparison.OrdinalIgnoreCase)).Any();
+    }    
+
+    private EnvDTE.DTE m_dte;
+    private EnvDTE.Project m_activeProject;
+  
+  	private string GetDbConnectionString ( string initialCatalog ) 
+	{
+		SqlConnectionStringBuilder builder = new SqlConnectionStringBuilder();
+
+        builder.DataSource = DataSource;
+        builder.InitialCatalog = initialCatalog;
+        builder.UserID = UserID;
+        builder.Password = Password;
+        builder.IntegratedSecurity = IntegratedSecurity;
+
+        if (builder.IntegratedSecurity)
+        {
+            builder.UserID = string.Empty;
+            builder.Password = string.Empty;
+        }
+
+		var connectionString = builder.ConnectionString;
+		if (string.IsNullOrEmpty(connectionString)) {
+			Error("Connection string to settings database: '{0}' is null.", initialCatalog);
+		}
+
+		return connectionString ?? "";
+	}
+
+	private bool GetDbTable( string initialCatalog, string settingsTable )
+	{
+		bool exists = false;
+		try
+		{
+			using (SqlConnection conn = new SqlConnection(GetDbConnectionString(initialCatalog)))
+			{
+				string sql = "select case when exists((select * from information_schema.tables where table_name = '" + settingsTable + "')) then 1 else 0 end";
+				SqlCommand cmd = new SqlCommand(sql, conn);
+				conn.Open();
+
+				exists = (Int32)cmd.ExecuteScalar() == 1 ? true : false;
+				conn.Close();
+			}
+		}
+		catch(Exception)
+		{
+			Error("Unable to connect to database: '{0}'.", initialCatalog);
+		}
+
+		return exists;
+	}
+
+	private KeyValueConfigurationCollection GetDbConfiguration( string initialCatalog, string settingsTable )
+	{
+		KeyValueConfigurationCollection col = new KeyValueConfigurationCollection();
+		using (SqlConnection conn = new SqlConnection(GetDbConnectionString(initialCatalog)))
+		{
+			string sql = "select * from " + settingsTable;
+			SqlCommand cmd = new SqlCommand(sql, conn);
+			conn.Open();
+
+			using(SqlDataReader reader = cmd.ExecuteReader())
+			{
+				while (reader.Read())
+				{
+					string key = reader["Key"].ToString();
+					string value = reader["Value"].ToString();
+
+					if (col[key] == null)
+					{
+						col.Add(new KeyValueConfigurationElement(key, value));
+					}
+				}
+			}
+
+			conn.Close();
+		}
+
+		return col;
+	}
+
+    public KeyValueConfigurationCollection GetAppSettings ( string initialCatalog, string settingsTable )
+    {
+		KeyValueConfigurationCollection col = new KeyValueConfigurationCollection();
+		if (GetDbTable(initialCatalog, settingsTable))
+		{
+			col = GetDbConfiguration(initialCatalog, settingsTable);
+		}
+
+		return col;
+    }
+
+	private KeyValueConfigurationCollection GetAppSettings ( EnvDTE.ProjectItem configItem )
+    {
+        if (configItem != null)
+        {
+            var configFile = new ExeConfigurationFileMap() { ExeConfigFilename = GetProjectItemFileName(configItem) };
+
+            var config = ConfigurationManager.OpenMappedExeConfiguration(configFile, ConfigurationUserLevel.None);
+
+            return (config.AppSettings != null) ? config.AppSettings.Settings : null;
+        };
+
+        return null;
+    }
+
+    private string GetSettingConverter ( Type type )
+	{
+		string converter;
+		if (m_settingsConverter.Value.TryGetValue(type, out converter))
+			return converter;
+		
+		return "";
+	}
+
+	private string GetSettingsConverterCulture (Type type)
+	{
+		if (type.Name != "Boolean" && type.Name != "String")
+		{
+			return ", CultureInfo.InvariantCulture";
+		}
+
+		return "";
+	}
+
+    private Type GetSettingType ( string name, string value )
+	{
+        Type explicitType;
+		if (m_settingsTypes.TryGetValue(name, out explicitType) && explicitType != null)
+			return explicitType;
+
+		int iValue;
+		if (Int32.TryParse(value, NumberStyles.Integer, null, out iValue))
+			return typeof(int);
+						
+		long lValue;
+		if (long.TryParse(value, out lValue))
+			return typeof(long);
+
+		double dValue;
+		if (double.TryParse(value, NumberStyles.AllowDecimalPoint | NumberStyles.AllowCurrencySymbol, CultureInfo.InvariantCulture, out dValue))
+			return typeof(double);
+				
+		bool bValue;
+		if (Boolean.TryParse(value, out bValue))
+			return typeof(bool);
+
+		DateTime dateValue;
+		if (DateTime.TryParse(value, out dateValue))
+			return typeof(DateTime);
+
+		return typeof(string);
+	}
+    
+    private static Dictionary<Type, string> InitializeSettingsConverter ()
+	{
+		return new Dictionary<Type, string>() {
+					{ typeof(sbyte), "SByte.Parse" },
+					{ typeof(short), "Int16.Parse" },		            
+					{ typeof(int), "Int32.Parse" },
+					{ typeof(long), "Int64.Parse" },           
+
+					{ typeof(byte), "Byte.Parse" },
+					{ typeof(ushort), "UInt16.Parse" },
+					{ typeof(uint), "UInt32.Parse" },
+					{ typeof(ulong), "UInt64.Parse" },
+
+					{ typeof(float), "Single.Parse" },
+					{ typeof(double), "Double.Parse" },		
+					{ typeof(decimal), "Decimal.Parse" },		
+					
+					{ typeof(bool), "Boolean.Parse" },                    		            		            		            
+					{ typeof(char), "Char.Parse" },
+					{ typeof(DateTime), "DateTime.Parse" },
+					{ typeof(Guid), "Guid.Parse" },
+					{ typeof(TimeSpan), "TimeSpan.Parse" },
+
+					{ typeof(string), "" }
+					};
+	}    
+    
+    protected override void Validate ()
+    {
+        base.Validate();
+
+        KeyValueConfigurationCollection info = GetAppSettings(InitialCatalog, SettingsTable);
+		if (info == null || info.Count == 0)
+			Error("No appSetting entries found in database: '{0}' table: '{1}'.", InitialCatalog, SettingsTable);
+    }
+
+    public EnvDTE.Project ActiveProject
+    {
+        get
+        {
+            if (m_activeProject == null)
+            {
+                if (DteInstance != null)
+                {
+                    var projects = (Array)DteInstance.ActiveSolutionProjects;
+
+                    m_activeProject = (projects != null && projects.Length > 0) ? (EnvDTE.Project)projects.GetValue(0) : null;
+                };
+            };
+
+            return m_activeProject;
+        }
+    }
+
+    public EnvDTE.DTE DteInstance
+    {
+        get
+        {
+            if (m_dte == null)
+                m_dte = (EnvDTE.DTE)(TransformationContext.Current.GetService(typeof(EnvDTE.DTE)));
+
+            return m_dte;
+        }
+    }
+
+    public EnvDTE.ProjectItem FindConfigProjectItem ( EnvDTE.Project source )
+    {
+        return FindItem(source, "web.config", true) ?? FindItem(source, "app.config", true);
+    }
+
+    public static EnvDTE.ProjectItem FindItem ( EnvDTE.Project source, string itemName, bool recurse )
+    {            
+        var items = source.ProjectItems;
+
+        //ProjectItems.Item() will throw if the item does not exist so do it the hard way		
+        foreach (EnvDTE.ProjectItem child in items)
+        {
+            if (String.Compare(child.Name, itemName, true) == 0)
+                return child;                                
+        };
+
+        if (recurse)
+        {
+            foreach (EnvDTE.ProjectItem child in items)
+            {
+                var item = FindItem(child, itemName, true);
+                if (item != null)
+                    return item;
+            };
+        };
+
+        return null;
+    }
+
+    public static EnvDTE.ProjectItem FindItem ( EnvDTE.ProjectItem source, string itemName, bool recurse )
+    {            
+        var items = source.ProjectItems;
+
+        //ProjectItems.Item() will throw if the item does not exist so do it the hard way		
+        foreach (EnvDTE.ProjectItem child in items)
+        {
+            if (String.Compare(child.Name, itemName, true) == 0)
+                return child;                                
+        };
+
+        if (recurse)
+        {
+            foreach (EnvDTE.ProjectItem child in items)
+            {
+                var item = FindItem(child, itemName, true);
+                if (item != null)
+                    return item;
+            };
+        };
+
+        return null;
+    }
+
+    public EnvDTE.Project FindProject ( string projectName )
+    {
+        if (String.IsNullOrEmpty(projectName))
+                return null;
+
+        foreach (EnvDTE.Project project in DteInstance.Solution.Projects)
+        {
+            if (String.Compare(project.Name, projectName, true) == 0)
+                return project;
+        };
+
+        return null;
+    }
+
+    public static string GetFriendlyName ( Type source )
+    {
+        var provider = new CSharpCodeProvider();
+
+        var tr = new CodeTypeReference(source);
+
+        var str = provider.GetTypeOutput(tr);
+
+        //Ref and out parameters have an & on the end so strip it off
+        if (str.EndsWith("&"))
+            return str.Substring(0, str.Length - 1);
+
+        return str;
+    }
+    
+    public string GetProjectItemFileName ( EnvDTE.ProjectItem item )
+    {
+        return (item != null && item.FileCount > 0) ? item.FileNames[0] : "";
+    }
+
+    public override string TransformText () 
+    {
+        //var className = PropertyName(Path.GetFileNameWithoutExtension(TransformationContext.Current.Host.TemplateFile));
+		var className = "SettingsDatabase";
+#>
+/*
+ * This file is auto-generated from a config file.  
+ * Do not modify this file.  Modifications will be lost when the file is regenerated.
+ */
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using ConfigurationGenerator.Watchers;
+using ConfigurationGenerator.Watchers.Abstract;
+
+namespace <#= DefaultNamespace #>
+{    	
+	public class <#= className #>
+	{	
+		public IDatabaseWatcher DatabaseWatcher { get; set; }
+
+		public Dictionary<string, string> CurrentConfigurationCollection { get; private set; }
+
+		public <#= className #>(bool watch = false)
+		{
+			this.DatabaseWatcher = new DatabaseWatcher(watch, "<#= InitialCatalog #>", "<#= SettingsTable #>", <#= RefreshTimeout #>);
+			
+			this.CurrentConfigurationCollection = new Dictionary<string, string>();
+			RefreshConfiguration();
+		}
+
+		public void RefreshConfiguration()
+		{
+<#+
+        foreach (KeyValueConfigurationElement setting in GetAppSettings(InitialCatalog, SettingsTable)) { 
+            if (IsExcluded(setting.Key))
+                continue;
+
+            var type = GetSettingType(setting.Key, setting.Value);
+#>
+			<#= PropertyName(setting.Key) #> = <#= GetSettingConverter(type) #>(GetConfigSetting("<#= setting.Key #>")<#= GetSettingsConverterCulture(type) #>);
+<#+      }
+#>
+		}
+<#+
+        foreach (KeyValueConfigurationElement setting in GetAppSettings(InitialCatalog, SettingsTable)) { 
+            if (IsExcluded(setting.Key))
+                continue;
+
+            var type = GetSettingType(setting.Key, setting.Value);
+#>
+
+        public <#= GetFriendlyName(type) #> <#= PropertyName(setting.Key) #>
+        {
+            get; private set;
+        }
+<#+      }
+#>
+        protected virtual string GetConfigSetting(string settingName)
+		{
+            string setting = string.Empty;
+            if (this.DatabaseWatcher.Collection != null 
+				&& this.DatabaseWatcher.Collection.Any())
+            {
+                setting = this.DatabaseWatcher.Collection[settingName];
+            }
+
+            string value = "";
+            this.CurrentConfigurationCollection.TryGetValue(settingName, out value);
+
+            // new dict item?
+            if (string.IsNullOrEmpty(value))
+            {
+                this.CurrentConfigurationCollection.Add(settingName, setting);
+            }
+            else
+            {
+                // value exists in dict - update it
+                if (!value.Equals(setting, StringComparison.InvariantCultureIgnoreCase))
+                {
+                    this.CurrentConfigurationCollection[settingName] = setting;
+                }
+            }
+
+			return setting ?? "";
+		}				
+	}
+}   
+<#+
+        return this.GenerationEnvironment.ToString();
+    }
+}
+#>

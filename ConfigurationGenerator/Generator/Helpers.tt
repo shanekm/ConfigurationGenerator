@@ -1,0 +1,286 @@
+<#@ template hostSpecific="true" debug="false" #>
+<#@ assembly name="EnvDTE" #>
+<#@ assembly name="System.Core" #>
+<#@ assembly name="System.Data.Linq" #>
+<#@ assembly name="System.Xml" #>
+<#@ assembly name="System.Xml.Linq" #>
+<#@ include file="T4Toolbox.tt" #>
+<#@ import namespace="System" #>
+<#@ import namespace="System.CodeDom" #>
+<#@ import namespace="System.CodeDom.Compiler" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ import namespace="System.IO" #>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Text" #>
+<#@ import namespace="System.Xml" #>
+<#@ import namespace="System.Xml.Schema" #>
+<#@ import namespace="System.Xml.Serialization" #>
+<#@ import namespace="Microsoft.CSharp" #>
+<#+
+
+public class Helpers : CSharpTemplate
+{
+	public override string TransformText()
+	{
+		base.TransformText();
+#>
+namespace <#= DefaultNamespace #>
+{
+	public class <#= Identifier("Sample Class") #>
+	{
+		private string <#= FieldName("Sample Field") #>;
+
+		public string <#= PropertyName("Sample Property") #> { get; set; }
+	}
+}
+<#+
+        return this.GenerationEnvironment.ToString();
+	}
+}
+#>
+<#+
+    public class XsdClassGen
+    {
+        private class SchemaMapping
+        {
+            public SchemaMapping()
+            {
+                TypeMappings = new Dictionary<string, string>();
+            }
+
+            public string SchemaNamespace { get; set; }
+            public string CodeNamespace { get; set; }
+            public IDictionary<string, string> TypeMappings { get; private set; }
+        }
+
+		public string XmlFilePath { get; set; }
+
+        private readonly CodeDomProvider _codeProvider;
+        private readonly string _defaultCodeNamespace;
+        private readonly XmlSchemas _schemas = new XmlSchemas();
+        private readonly Dictionary<string, SchemaMapping> _schemaMappings = new Dictionary<string,SchemaMapping>();
+
+        public XsdClassGen()
+            : this(new CSharpCodeProvider(), "")
+        {
+        }
+
+        public XsdClassGen(string defaultCodeNamespace)
+            : this(new CSharpCodeProvider(), defaultCodeNamespace)
+        {
+        }
+
+        public XsdClassGen(CodeDomProvider codeProvider, string defaultCodeNamespace)
+        {
+            _codeProvider = codeProvider;
+            _defaultCodeNamespace = defaultCodeNamespace;
+        }
+
+		public void ReadSchema(string xmlString = null)
+		{
+			XmlReader reader = this.XmlFilePath == null ? XmlReader.Create(new StringReader(xmlString)) : XmlReader.Create(@XmlFilePath);
+			XmlSchemaSet schemaSet = new XmlSchemaSet();
+			XmlSchemaInference schema = new XmlSchemaInference();
+			schemaSet = schema.InferSchema(reader);
+
+			foreach (XmlSchema s in schemaSet.Schemas())
+			{
+				// Generate object
+				this.AddSchema(s);
+			}
+		}
+
+        public void AddSchema(XmlSchema schema)
+        {
+            _schemas.Add(schema);
+            ApplySchemaNamespaceMapping(schema.TargetNamespace, _defaultCodeNamespace);
+        }
+
+        public void LoadMappings(string path)
+        {
+            using (var reader = File.OpenText(path))
+            {
+                string line;
+                while ((line = reader.ReadLine()) != null)
+                {
+                    line = line.Trim();
+                    if ((line.Length == 0) || (line.StartsWith("#")))
+                    {
+                        continue;
+                    }
+                    var mapping = line.Split(',');
+                    if (mapping.Length == 2)
+                    {
+                        ApplySchemaNamespaceMapping(mapping[0], mapping[1]);
+                    }
+                    if (mapping.Length == 3)
+                    {
+                        ApplyTypeNameMapping(mapping[0], mapping[1], mapping[2]);
+                    }
+                }
+            }
+        }
+
+        public void ApplySchemaNamespaceMapping(string schemaNamespace, string codeNamespace)
+        {
+			schemaNamespace = schemaNamespace ?? codeNamespace;
+            if (_schemaMappings.Keys.Contains(schemaNamespace))
+            {
+                _schemaMappings[schemaNamespace].CodeNamespace = codeNamespace;
+            }
+            else
+            {
+                _schemaMappings.Add(schemaNamespace,
+                                    new SchemaMapping { SchemaNamespace = schemaNamespace, CodeNamespace = codeNamespace });
+            }
+        }
+
+        public void ApplyTypeNameMapping(string schemaNamespace, string elementName, string typeName)
+        {
+            SchemaMapping mapping;
+            if (_schemaMappings.Keys.Contains(schemaNamespace))
+            {
+                mapping = _schemaMappings[schemaNamespace];
+            }
+            else
+            {
+                ApplySchemaNamespaceMapping(schemaNamespace, _defaultCodeNamespace);
+                mapping = _schemaMappings[schemaNamespace];
+            }
+            if (mapping.TypeMappings.Keys.Contains(elementName))
+            {
+                mapping.TypeMappings[elementName] = typeName;
+            }
+            else
+            {
+                mapping.TypeMappings.Add(elementName, typeName);
+            }
+        }
+
+        public IDictionary<string, List<string>> Generate(TextWriter writer)
+        {
+            var rootElementTypes = new Dictionary<string, List<string>>();
+            var codeGeneratorOptions = new CodeGeneratorOptions();
+            var schemaImporter = new XmlSchemaImporter(_schemas);
+            _schemas.Compile(null, true);
+            foreach (var mapping in _schemaMappings.Values)
+            {
+                var codeNamespace = GenerateCodeForMapping(mapping, schemaImporter);
+                _codeProvider.GenerateCodeFromNamespace(codeNamespace, writer, codeGeneratorOptions);
+                var rootTypes = GetSchemaRootElementTypeNames(codeNamespace).ToList();
+                if (rootElementTypes.ContainsKey(mapping.CodeNamespace))
+                {
+                    var types = rootElementTypes[mapping.CodeNamespace];
+                    types.AddRange(rootTypes);
+                }
+                else
+                {
+                    rootElementTypes.Add(mapping.CodeNamespace, rootTypes);
+                }
+            }
+            return rootElementTypes;
+        }
+
+        private CodeNamespace GenerateCodeForMapping(SchemaMapping mapping, XmlSchemaImporter schemaImporter)
+        {
+            var codeNamespace = new CodeNamespace(mapping.CodeNamespace);
+            var codeExporter = new XmlCodeExporter(codeNamespace);
+            var maps = new List<XmlTypeMapping>();
+            maps.AddRange(_schemas
+                .Where(schema => schema.TargetNamespace == mapping.SchemaNamespace)
+                .SelectMany(schema => schema.SchemaTypes.Values.Cast<XmlSchemaType>()
+                    .Select(schemaType => schemaImporter.ImportSchemaType(schemaType.QualifiedName))));
+            maps.AddRange(_schemas
+                .Where(schema => schema.TargetNamespace == mapping.SchemaNamespace)
+                .SelectMany(schema => schema.Elements.Values.Cast<XmlSchemaElement>()
+                    .Select(schemaElement => schemaImporter.ImportTypeMapping(schemaElement.QualifiedName))));
+            foreach (var map in maps)
+            {
+                codeExporter.ExportTypeMapping(map);
+            }
+            CodeGenerator.ValidateIdentifiers(codeNamespace);
+            ApplyTypeMappings(codeNamespace, mapping);
+            return codeNamespace;
+        }
+
+        private static void ApplyTypeMappings(CodeNamespace codeNamespace, SchemaMapping mapping)
+        {
+            foreach (var elementName in mapping.TypeMappings.Keys)
+            {
+                var typeName = mapping.TypeMappings[elementName];
+                var codeType = FindTypeForSchemaRoot(codeNamespace, mapping.SchemaNamespace, elementName);
+                var oldName = codeType.Name;
+                codeType.Name = typeName;
+                UpdateAttributeArguments<XmlRootAttribute>(codeType, "", oldName);
+                UpdateAttributeArguments<XmlTypeAttribute>(codeType, "TypeName", oldName);
+            }
+        }
+
+        private IEnumerable<string> GetSchemaRootElementTypeNames(CodeNamespace codeNamespace)
+        {
+            return _schemas
+                .SelectMany(xsd => xsd.Elements.Values.Cast<XmlSchemaElement>())
+                .Where(e => e.ElementSchemaType is XmlSchemaComplexType)
+                .Select(e => FindTypeForSchemaRoot(codeNamespace, e.QualifiedName.Namespace, e.QualifiedName.Name))
+                .Where(t => t != null)
+                .Select(t => t.Name);
+        }
+
+        private static CodeTypeDeclaration FindTypeForSchemaRoot(CodeNamespace codeNamespace, string schemaNs, string elementName)
+        {
+            return codeNamespace.Types.Cast<CodeTypeDeclaration>().FirstOrDefault(t => HasXmlRootAttribute(t, schemaNs, elementName));
+        }
+
+        private static bool HasXmlRootAttribute(CodeTypeMember codeType, string schemaNs, string elementName)
+        {
+            var rootAttrib = GetCodeAttributeDeclaration<XmlRootAttribute>(codeType);
+            if (rootAttrib == null)
+            {
+                return false;
+            }
+            var nsArg = GetAttributeArgument(rootAttrib, "Namespace");
+            if (nsArg == null)
+            {
+                return false;
+            }
+            if ((string)GetAttributeArgumentValue(nsArg) != schemaNs)
+            {
+                return false;
+            }
+            var nameArg = GetAttributeArgument(rootAttrib, "");
+            var name = codeType.Name;
+            if (nameArg != null)
+            {
+                name = (string)GetAttributeArgumentValue(nameArg);
+            }
+            return name == elementName;
+        }
+
+        private static void UpdateAttributeArguments<T>(CodeTypeMember codeType, string findArg, string oldValue) where T : Attribute
+        {
+            var attrib = GetCodeAttributeDeclaration<T>(codeType);
+            var arg = GetAttributeArgument(attrib, findArg);
+            if (arg != null)
+            {
+                return;
+            }
+            arg = new CodeAttributeArgument(findArg, new CodePrimitiveExpression(oldValue));
+            attrib.Arguments.Insert(0, arg);
+        }
+
+        private static CodeAttributeDeclaration GetCodeAttributeDeclaration<T>(CodeTypeMember type)
+        {
+            return type.CustomAttributes.Cast<CodeAttributeDeclaration>().FirstOrDefault(a => a.Name == typeof(T).FullName);
+        }
+
+        private static CodeAttributeArgument GetAttributeArgument(CodeAttributeDeclaration attribute, string argument)
+        {
+            return attribute.Arguments.Cast<CodeAttributeArgument>().FirstOrDefault(a => a.Name == argument);
+        }
+
+        private static object GetAttributeArgumentValue(CodeAttributeArgument arg)
+        {
+            return arg == null ? null : ((CodePrimitiveExpression)arg.Value).Value;
+        }
+    }
+#>

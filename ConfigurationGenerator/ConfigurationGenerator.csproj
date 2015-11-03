@@ -1,0 +1,113 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="12.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{580028F9-E97D-481E-8FD4-D8E83F0C954F}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <AppDesignerFolder>Properties</AppDesignerFolder>
+    <RootNamespace>ConfigurationGenerator</RootNamespace>
+    <AssemblyName>ConfigurationGenerator</AssemblyName>
+    <TargetFrameworkVersion>v4.5</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Configuration" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="System.Data.DataSetExtensions" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Xml" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Files\bookstore.cs" />
+    <Compile Include="Files\pageAppearance.cs" />
+    <Compile Include="Files\secureSettings.cs" />
+    <Compile Include="Generator\GenerateAppConfigSettings.generated.cs">
+      <AutoGen>True</AutoGen>
+      <DesignTime>True</DesignTime>
+      <DependentUpon>GenerateAppConfigSettings.tt</DependentUpon>
+    </Compile>
+    <Compile Include="Generator\GenerateDatabaseSettings.generated.cs">
+      <AutoGen>True</AutoGen>
+      <DesignTime>True</DesignTime>
+      <DependentUpon>GenerateDatabaseSettings.tt</DependentUpon>
+    </Compile>
+    <Compile Include="Generator\GenerateXmlSettings.generated.cs">
+      <AutoGen>True</AutoGen>
+      <DesignTime>True</DesignTime>
+      <DependentUpon>GenerateXmlSettings.tt</DependentUpon>
+    </Compile>
+    <Compile Include="Generator\Helpers.cs">
+      <AutoGen>True</AutoGen>
+      <DesignTime>True</DesignTime>
+      <DependentUpon>Helpers.tt</DependentUpon>
+    </Compile>
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Watchers\Abstract\IDatabaseWatcher.cs" />
+    <Compile Include="Watchers\Abstract\IFileWatcher.cs" />
+    <Compile Include="Watchers\DatabaseWatcher.cs" />
+    <Compile Include="Watchers\FileWatcher.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="App.config" />
+    <None Include="Generator\GenerateAppConfigSettings.tt">
+      <Generator>TextTemplatingFileGenerator</Generator>
+      <LastOutputs>.\GenerateAppConfigSettings.generated.cs</LastOutputs>
+      <LastGenOutput>GenerateAppConfigSettings.generated.cs</LastGenOutput>
+    </None>
+    <None Include="Generator\GenerateDatabaseSettings.tt">
+      <Generator>TextTemplatingFileGenerator</Generator>
+      <LastOutputs>.\GenerateDatabaseSettings.cs</LastOutputs>
+      <LastGenOutput>GenerateDatabaseSettings.generated.cs</LastGenOutput>
+    </None>
+    <None Include="Generator\GenerateXmlSettings.tt">
+      <Generator>TextTemplatingFileGenerator</Generator>
+      <LastOutputs>.\GenerateXmlSettings.generated.cs</LastOutputs>
+      <LastGenOutput>GenerateXmlSettings.generated.cs</LastGenOutput>
+    </None>
+    <None Include="Generator\Helpers.tt">
+      <Generator>TextTemplatingFileGenerator</Generator>
+      <LastGenOutput>Helpers.cs</LastGenOutput>
+      <LastOutputs>.\Helpers.cs</LastOutputs>
+    </None>
+    <None Include="Generator\SettingsAppConfigTemplate.tt" />
+    <None Include="Generator\SettingsDatabaseTemplate.tt" />
+    <None Include="Generator\SettingsXmlTemplate.tt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Bookstore.xml" />
+  </ItemGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <Service Include="{508349B6-6B84-4DF5-91F0-309BEEBAD82D}" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
+       Other similar extension points exist, see Microsoft.Common.targets.
+  <Target Name="BeforeBuild">
+  </Target>
+  <Target Name="AfterBuild">
+  </Target>
+  -->
+</Project>
